@@ -19,7 +19,7 @@ namespace web {
 
 class StateSequenceVisualization : public D3Visualization {
 protected:
-  /// Convenient structure to keep track of margins.
+  /// Convenient structure to keep track of margins. (currently no editing this)
   struct Margin {
     double top;
     double right;
@@ -33,10 +33,9 @@ protected:
 
   Margin margins;
 
-  // TODO: implement this
-  bool dynamic_width;
-  bool data_drawn;
-  bool data_loaded;
+  bool dynamic_width;               ///< Do we dynamically resize visualization width based on parent element width?
+  bool data_drawn;                  ///< Have we finished drawing the data yet?
+  bool data_loaded;                 ///< Have we finished loading the data yet?
 
   // Dataset descriptions.
   std::string state_seq_cname;       ///< Column name in dataset that specifies state sequence.
@@ -46,17 +45,23 @@ protected:
   std::string seqID_cname;           ///< Column name in the dataset that specifies sequence ID within its category.
   std::string seq_delim;             ///< Sequence delimiter.
 
-  emp::vector<std::string> categories;
-  std::string cur_category;
+  emp::vector<std::string> categories;  ///< Keeps tack of currently available sequence categories.
+  std::string cur_category;             ///< Keeps track of current category to display. Validity is checked on Draw().
 
   // Visualization can dynamically resize, so using my own width/height variables.
-  double actual_width;
-  double actual_height;
+  double actual_width;    ///< Actual width of the visualization (may be different from Info()->width).
+  double actual_height;   ///< Actual height of the visualization (may be different from Info()->height).
 
+  /// Internal function to set the visualization width to w.
   void SetWidthInternal(double w) { actual_width = w; }
+
+  /// Internal function to set the visualization height to h.
   void SetHeightInternal(double h) { actual_height = h; }
+
+  /// Internal function to set the current category to cat. No validity checking.
   void SetCurrentCategoryInternal(const std::string & cat) { cur_category = cat; }
 
+  /// Internal data callback function. (called when data is done loading)
   void DataCallback() {
     // Get categories out of js and into C++.
     categories.clear();
@@ -68,9 +73,8 @@ protected:
     Draw();
   }
 
-  // Coerce naively loaded data into proper format.
+  /// Internal load data from CSV function given the filename where data is stored.
   void LoadDataFromCSV(std::string filename) {
-    // TODO: add category and sequence IDs
     EM_ASM_ARGS({
       var vis_obj_id = Pointer_stringify($0);
       var filename = Pointer_stringify($1);
@@ -151,6 +155,7 @@ protected:
     );
   }
 
+  /// Internal draw function.
   void Draw() {
     EM_ASM_ARGS({
       var vis_obj_id = Pointer_stringify($0);
@@ -245,6 +250,8 @@ protected:
     data_drawn = true;
   }
 
+  /// Internal function used to resize the visualization to dimensions specified by
+  /// actual_width and actual_height.
   void Resize() {
     if (!data_drawn) return;
     EM_ASM_ARGS({
@@ -322,12 +329,12 @@ protected:
 
 public:
   StateSequenceVisualization(double _width, double _height, bool _dynamic_width=false)
-    : D3Visualization(_width, _height), margins(), dynamic_width(_dynamic_width), data_drawn(false), data_loaded(false),
+    : D3Visualization(_width, _height), margins(), dynamic_width(_dynamic_width),
+      data_drawn(false), data_loaded(false),
       state_seq_cname(), state_starts_cname(), state_durations_cname(), category_cname(),
       seqID_cname(), seq_delim(), categories(), cur_category(""),
       actual_width(_width), actual_height(_height)
   {
-    // Create functions relevant to
     EM_ASM_ARGS({
       var obj_id = Pointer_stringify($0);
       // Create a little JS container to hold everything relevant to this visualization.
@@ -340,7 +347,6 @@ public:
       vis["categories"] = [];
       vis["seqs_by_category"] = {};
       vis["domains"] = {};
-
     }, GetID().c_str());
   }
 
@@ -390,28 +396,48 @@ public:
     this->pending_funcs.Run();
   }
 
+  /// Get the current set of available categories that can be displayed.
   const emp::vector<std::string> & GetCategories() const { return categories; }
 
+  /// Get actual width of the visualization.
+  /// Because of dynamic sizing, this may be different from normal GetWidth().
   double GetForRealWidth() const { return actual_width; }
+
+  /// Get actual height of the visualization.
+  /// Because of dynamic sizing, this may be different from normal GetHeight().
   double GetForRealHeight() const { return actual_height; }
 
+  /// Retreive the current category. Will return "" if current category has not been
+  /// set (by LoadDataFromCSV or SetCurrentCategory functions) yet.
   const std::string & GetCurrentCategory() const { return cur_category; }
 
+  /// Does this visualization have a dynamically sized width?
   bool IsDynamicWidth() const { return dynamic_width; }
 
+  /// Function to set width sizing method (false = static, true = dynamic).
   void SetDynamicWidth(bool val) { dynamic_width = val; }
 
+  /// Set visualization width.
+  /// Warning: if you set the visualization width, it will automatically change this visualization
+  /// to non-dynamically sizing.
+  /// Once width is updated, resizes the visualization.
   void SetWidth(double w) {
     dynamic_width = false;
     SetWidthInternal(w);
     if (data_drawn) Resize();
   }
 
+  /// Set visualization height.
+  /// Once the height is set, resizes the visualization.
   void SetHeight(double h) {
     SetHeightInternal(h);
     if (data_drawn) Resize();
   }
 
+  /// Set visualization width/height in one go.
+  /// Warning: if you set the visualization width/height this way, it will automatically change this visualization
+  /// to non-dynamically sizing.
+  /// Once values are set, resize visualization.
   void SetSize(double w, double h) {
     dynamic_width = false;
     SetWidthInternal(w);
@@ -419,6 +445,9 @@ public:
     if (data_drawn) Resize();
   }
 
+  /// Set current category to display.
+  /// If data has already been loaded, redraw.
+  /// Warning: does not check validity of category here. Validity is checked during drawing.
   void SetCurrentCategory(const std::string & cat) {
     SetCurrentCategoryInternal(cat);
     if (data_loaded) Draw();
@@ -429,6 +458,9 @@ public:
   ///   * states: name of the column that gives state sequence.
   ///   * starts: name of the column that gives the start points for each state in the state sequence.
   ///   * durations: name of the column that gives the durations for each state in the state sequence.
+  ///   * category: name of the column that gives sequence category (analogous to treatment).
+  ///   * seqID: name of column that gives sequence ID (which should be unique within a category).
+  ///   * delim: delimiter to used when parsing state/state start/state duration sequences.
   void LoadDataFromCSV(std::string filename, std::string states,
                        std::string starts, std::string durations,
                        std::string category, std::string seqID,
@@ -439,12 +471,23 @@ public:
     category_cname = category;
     seqID_cname = seqID;
     seq_delim = delim;
+
+    data_loaded = false;
+    data_drawn = false;
+
     if (this->init) {
       LoadDataFromCSV(filename);
     } else {
       this->pending_funcs.Add([this, filename]() { this->LoadDataFromCSV(filename); });
     }
   }
+
+  /// Redraw the visualization. Does nothing if data has not been drawn yet. 
+  void Redraw() {
+    if (!data_drawn) return;
+    Draw();
+  }
+
 };
 
 }
