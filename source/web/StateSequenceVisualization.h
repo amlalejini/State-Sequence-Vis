@@ -3,22 +3,23 @@
 
 #include <string>
 #include <iostream>
+#include <chrono>
 
 #include "base/Ptr.h"
+#include "base/vector.h"
 #include "web/init.h"
 #include "web/JSWrap.h"
+#include "web/js_utils.h"
 #include "web/web.h"
 #include "web/d3/dataset.h"
 #include "web/d3/visualizations.h"
 
+#include "control/Signal.h"
+
+
 namespace emp {
 namespace web {
 
-// TODO:
-//  [ ] Add current category, default category.
-//     [ ] Compute y/x domains based on current category.
-//  [ ] Dynamic sizing.
-//  [ ]
 class StateSequenceVisualization : public D3Visualization {
 protected:
   /// Convenient structure to keep track of margins.
@@ -28,7 +29,7 @@ protected:
     double bottom;
     double left;
 
-    Margin(double _top=10.0, double _right=10.0, double _bottom=10.0, double _left=10.0)
+    Margin(double _top=10.0, double _right=10.0, double _bottom=10.0, double _left=50.0)
       : top(_top), right(_right), bottom(_bottom), left(_left)
     { ; }
   };
@@ -36,7 +37,8 @@ protected:
   Margin margins;
 
   // TODO: implement this
-  bool dynamic_sizing;
+  bool dynamic_width;
+  bool data_drawn;
 
   // Dataset descriptions.
   std::string state_seq_cname;       ///< Column name in dataset that specifies state sequence.
@@ -45,6 +47,26 @@ protected:
   std::string category_cname;        ///< Column name in dataset that specifies sequence category.
   std::string seqID_cname;           ///< Column name in the dataset that specifies sequence ID within its category.
   std::string seq_delim;             ///< Sequence delimiter.
+
+  emp::vector<std::string> categories;
+  std::string cur_category;
+
+  // Visualization can dynamically resize, so using my own width/height variables.
+  double actual_width;
+  double actual_height;
+
+  void SetWidthInternal(double w) { actual_width = w; }
+  void SetHeightInternal(double h) { actual_height = h; }
+
+  void DataCallback() {
+    std::cout << "C++ data callback!" << std::endl;
+    // Get categories out of js and into C++.
+    categories.clear();
+    emp::pass_vector_to_cpp(categories);
+    cur_category = categories[0]; //TODO: some way to do an assert here?
+    // Trigger a draw.
+    Draw();
+  }
 
   // Coerce naively loaded data into proper format.
   void LoadDataFromCSV(std::string filename) {
@@ -62,6 +84,7 @@ protected:
       var vis = emp.StateSeqVis[vis_obj_id];
       vis["categories"] = [];
       vis["seqs_by_category"] = {};
+      vis["domains"] = {};
 
       // Max/min sequence values. (for y domain calculations).
       var max_seq = null;
@@ -74,21 +97,27 @@ protected:
         var category = row[category_cname];
         var seq_id = row[seqID_cname];
         var state_sequence = [];
-        if (states.length > 0 && max_seq == null) { max_seq = state_starts[0] + state_durations[0]; }
-        if (states.length > 0 && min_seq == null) { min_seq = state_starts[0]; }
-        for (i = 0; i < states.length; i++) {
-          if (max_seq < (state_starts[i] + state_durations[i])) { max_seq = state_starts[i] + state_durations[i]; }
-          if (min_seq > state_starts[i]) { min_seq = state_starts[i]; }
-          state_sequence.push({state: states[i], duration: state_durations[i], start: state_starts[i]});
-        }
+
         // Build up a list of categories.
         if (vis["categories"].indexOf(category) == -1) {
           vis["seqs_by_category"][category] = [];
+          vis["domains"][category] = ({"y": ([state_starts[0], state_starts[0] + state_durations[0]]),
+                                      "x": ([0, 0])});
           vis["categories"].push(category);
         }
         //   Ensure that seq_ids are unique within a category.
         if (vis["seqs_by_category"][category].indexOf(seq_id) == -1) {
           vis["seqs_by_category"][category].push(seq_id);
+        }
+        vis["domains"][category]["x"][1] += 1;
+        for (i = 0; i < states.length; i++) {
+          if (vis["domains"][category]["y"][1] < (state_starts[i] + state_durations[i])) {
+            vis["domains"][category]["y"][1] = state_starts[i] + state_durations[i];
+          }
+          if (vis["domains"][category]["y"][0] > state_starts[i]) {
+            vis["domains"][category]["y"][0] = state_starts[i];
+          }
+          state_sequence.push({state: states[i], duration: state_durations[i], start: state_starts[i]});
         }
         var ret_obj = {};
         ret_obj["category"] = category;
@@ -99,12 +128,14 @@ protected:
 
       // Capture data exists to capture data from callback.
       var DataCallback = function(data) {
+        if (vis["categories"].length == 0) {
+          alert("Can't find categories for " + vis_obj_id + "! It's likely nothing will work");
+        }
         // Capture data, setup data-dependent variables.
         vis["data"] = data;
-        vis["domains"]["y"] = ([min_seq, max_seq]);
-        vis["domains"]["x"] = ([0, data.length]);
 
-        
+        emp_i.__outgoing_array = vis["categories"];
+        emp[vis_obj_id+"_data_callback"]();
       };
 
       d3.csv(filename, DataAccessor, DataCallback);
@@ -118,17 +149,177 @@ protected:
        seqID_cname.c_str(),
        seq_delim.c_str()
     );
+  }
 
-    // Trigger a draw.
-    if (this->init) {
-      Draw();
-    } else {
-      this->pending_funcs.Add([this]() { this->Draw(); });
-    }
+  void Draw() {
+    std::cout << "Draw!" << std::endl;
+    EM_ASM_ARGS({
+      var vis_obj_id = Pointer_stringify($0);
+      var GetHeight = emp[vis_obj_id+"_get_height"];
+      var GetWidth = emp[vis_obj_id+"_get_width"];
+
+      var cur_category = Pointer_stringify($1);
+      var margins = ({top: $2, right: $3, bottom: $4, left: $5});
+
+      // Get our handle on this visualization's container.
+      var vis = emp.StateSeqVis[vis_obj_id];
+
+      var vis_width = GetWidth();
+      var vis_height = GetHeight();
+      var canvas_width = vis_width - margins.left - margins.right;
+      var canvas_height = vis_height - margins.top - margins.bottom;
+
+      var x_domain = vis["domains"][cur_category]["x"];
+      var x_range = ([0, canvas_width]);
+      var y_domain = vis["domains"][cur_category]["y"];
+      var y_range = ([0, canvas_height]);
+
+      var xScale = d3.scale.linear().domain(x_domain).range(x_range);
+      var yScale = d3.scale.linear().domain(y_domain).range(y_range);
+
+      var svg = d3.select("#"+vis_obj_id);
+      svg.attr({"width": vis_width, "height": vis_height});
+      var canvas = d3.select("#StateSequenceVisualization-canvas-" + vis_obj_id);
+      canvas.attr({"transform": "translate(" + margins.left + "," + margins.top + ")"});
+
+      // Attach axes.
+      canvas.selectAll(".y_axis").remove();
+      canvas.selectAll(".x_axis").remove();
+      var xAxis = d3.svg.axis().scale(xScale).tickValues([]).orient("top");
+      var yAxis = d3.svg.axis().scale(yScale).orient("left");
+      canvas.append("g").attr({"class": "axis y_axis",
+                               "id": "StateSequenceVisualization-y_axis-" + vis_obj_id
+                             }).call(yAxis);
+      canvas.append("g").attr({"class": "axis x_axis",
+                               "id": "StateSequenceVisualization-x_axis-" + vis_obj_id
+                              }).call(xAxis);
+      var axes = canvas.selectAll(".axis");
+      axes.selectAll("path").style({"fill": "none", "stroke": "black", "shape-rendering": "crispEdges"});
+      axes.selectAll("text").style({"font-family": "sans-serif", "font-size": "10px"});
+
+      var data_canvas = d3.select("#StateSequenceVisualization-data_canvas-" + vis_obj_id);
+      data_canvas.selectAll("*").remove();
+      var filtered_data = vis["data"].filter(function(d) { return d.category == cur_category; });
+
+      var sequences = data_canvas.selectAll("g").data(filtered_data);
+      sequences.enter().append("g");
+      sequences.attr({"class": "state-sequence-" + vis_obj_id,
+                      "id": function(d) { return d.sequence_id + "_" + vis_obj_id; },
+                      "transform": function(seq, i) {
+                        var x_trans = xScale(i);
+                        var y_trans = yScale(0);
+                        return "translate(" + x_trans + "," + y_trans + ")";
+                      }
+                    });
+
+      sequences.each(function(seq, i) {
+        var states = d3.select(this).selectAll("rect").data(seq.state_sequence);
+        states.enter().append("rect");
+        states.attr({"class": function(info, i) { return info.state; },
+                     "state": function(info, i) { return info.state; },
+                     "start": function(info, i) { return info.start; },
+                     "duration": function(info, i) { return info.duration; },
+                     "transform": function(info, i) {
+                       return "translate(0," + yScale(info.start) + ")";
+                     },
+                     "height": function(info, i) { return yScale(info.duration) - 0.5; },
+                     "width": xScale(0.9),
+                     "fill": "grey"
+                   });
+      });
+
+    }, GetID().c_str(),
+       cur_category.c_str(),
+       margins.top,
+       margins.right,
+       margins.bottom,
+       margins.left
+    );
+    data_drawn = true;
+  }
+
+  void Resize() {
+    if (!data_drawn) return;
+    std::cout << "Resize!" << std::endl;
+    EM_ASM_ARGS({
+      var vis_obj_id = Pointer_stringify($0);
+      var GetHeight = emp[vis_obj_id+"_get_height"];
+      var GetWidth = emp[vis_obj_id+"_get_width"];
+
+      var cur_category = Pointer_stringify($1);
+      var margins = ({top: $2, right: $3, bottom: $4, left: $5});
+
+      // Get our handle on this visualization's container.
+      var vis = emp.StateSeqVis[vis_obj_id];
+
+      var vis_width = GetWidth();
+      var vis_height = GetHeight();
+      var canvas_width = vis_width - margins.left - margins.right;
+      var canvas_height = vis_height - margins.top - margins.bottom;
+
+      var x_domain = vis["domains"][cur_category]["x"];
+      var x_range = ([0, canvas_width]);
+      var y_domain = vis["domains"][cur_category]["y"];
+      var y_range = ([0, canvas_height]);
+
+      var xScale = d3.scale.linear().domain(x_domain).range(x_range);
+      var yScale = d3.scale.linear().domain(y_domain).range(y_range);
+
+      var svg = d3.select("#"+vis_obj_id);
+      svg.attr({"width": vis_width, "height": vis_height});
+      var canvas = d3.select("#StateSequenceVisualization-canvas-" + vis_obj_id);
+      canvas.attr({"transform": "translate(" + margins.left + "," + margins.top + ")"});
+
+      // Remove and re-attach axes.
+      canvas.selectAll(".y_axis").remove();
+      canvas.selectAll(".x_axis").remove();
+      var xAxis = d3.svg.axis().scale(xScale).tickValues([]).orient("top");
+      var yAxis = d3.svg.axis().scale(yScale).orient("left");
+      canvas.append("g").attr({"class": "axis y_axis",
+                               "id": "StateSequenceVisualization-y_axis-" + vis_obj_id
+                             }).call(yAxis);
+      canvas.append("g").attr({"class": "axis x_axis",
+                               "id": "StateSequenceVisualization-x_axis-" + vis_obj_id
+                              }).call(xAxis);
+      var axes = canvas.selectAll(".axis");
+      axes.selectAll("path").style({"fill": "none", "stroke": "black", "shape-rendering": "crispEdges"});
+      axes.selectAll("text").style({"font-family": "sans-serif", "font-size": "10px"});
+
+
+      var data_canvas = d3.select("#StateSequenceVisualization-data_canvas-" + vis_obj_id);
+      var sequences = data_canvas.selectAll(".state-sequence-"+vis_obj_id);
+      sequences.attr({"transform": function(seq, i) {
+                        var x_trans = xScale(i);
+                        var y_trans = yScale(0);
+                        return "translate(" + x_trans + "," + y_trans + ")";
+                      }
+                    });
+
+      sequences.each(function(seq, i) {
+        var states = d3.select(this).selectAll("rect");
+        states.attr({"transform": function(info, i) {
+                       return "translate(0," + yScale(info.start) + ")";
+                     },
+                     "height": function(info, i) { return yScale(info.duration) - 0.5; },
+                     "width": xScale(0.9)
+                   });
+      });
+
+    }, GetID().c_str(),
+       cur_category.c_str(),
+       margins.top,
+       margins.right,
+       margins.bottom,
+       margins.left
+    );
   }
 
 public:
-  StateSequenceVisualization() : D3Visualization(1, 1) {
+  StateSequenceVisualization(double _width, double _height, bool _dynamic_width=false)
+    : D3Visualization(_width, _height), margins(), dynamic_width(_dynamic_width), data_drawn(false),
+      state_seq_cname(), state_starts_cname(), state_durations_cname(), category_cname(),
+      seqID_cname(), seq_delim(), categories(), cur_category(), actual_width(_width), actual_height(_height)
+  {
     // Create functions relevant to
     EM_ASM_ARGS({
       console.log("Creating a state sequence vis!");
@@ -149,18 +340,74 @@ public:
 
   /// Setup is called automatically when the emp::Document is ready.
   void Setup() {
+    JSWrap([this]() { this->DataCallback(); }, GetID() + "_data_callback");
+    JSWrap([this](double w) { this->SetWidthInternal(w); }, GetID() + "_set_width");
+    JSWrap([this](double h) { this->SetHeightInternal(h); }, GetID() + "_set_height");
+    JSWrap([this]() { return this->GetForRealWidth(); }, GetID() + "_get_width");
+    JSWrap([this]() { return this->GetForRealHeight(); }, GetID() + "_get_height");
+    JSWrap([this]() { return this->IsDynamicWidth(); }, GetID() + "_is_dynamic_width");
+    JSWrap([this]() { this->Resize(); }, GetID() + "_resize");
+
     EM_ASM_ARGS({
       var vis_obj_id = Pointer_stringify($0);
+      var GetHeight = emp[vis_obj_id+"_get_height"];
+      var GetWidth = emp[vis_obj_id+"_get_width"];
+      var SetHeight = emp[vis_obj_id+"_set_height"];
+      var SetWidth = emp[vis_obj_id+"_set_width"];
+      var IsDynamicWidth = emp[vis_obj_id+"_is_dynamic_width"];
+      var Resize = emp[vis_obj_id+"_resize"];
       // Setup canvasi.
       var svg = d3.select("#"+vis_obj_id);
+      // Set size. (dynamic sizing vs. static)
+      if (IsDynamicWidth()) {
+        var w = svg[0][0].parentNode.clientWidth;
+        SetWidth(w);
+      }
+      svg.attr({"width": GetWidth(), "height": GetHeight()});
+
       svg.selectAll("*").remove();
       var canvas = svg.append("g").attr({"id": "StateSequenceVisualization-canvas-" + vis_obj_id,
                                          "class": "StateSequenceVisualization-canvas"});
       var data_canvas = canvas.append("g").attr({"id": "StateSequenceVisualization-data_canvas-" + vis_obj_id,
                                                  "class": "StateSequenceVisualization-data_canvas"});
+      // Add a window resize event listener.
+      window.addEventListener("resize", function() {
+                                          if (IsDynamicWidth()) {
+                                            SetWidth(svg[0][0].parentNode.clientWidth);
+                                            Resize();
+                                          }
+                                        }
+                              );
     }, GetID().c_str());
     this->init = true;
     this->pending_funcs.Run();
+  }
+
+  const emp::vector<std::string> & GetCategories() const { return categories; }
+
+  double GetForRealWidth() const { return actual_width; }
+  double GetForRealHeight() const { return actual_height; }
+
+  bool IsDynamicWidth() const { return dynamic_width; }
+
+  void SetDynamicWidth(bool val) { dynamic_width = val; }
+
+  void SetWidth(double w) {
+    dynamic_width = false;
+    SetWidthInternal(w);
+    if (data_drawn) Resize();
+  }
+
+  void SetHeight(double h) {
+    SetHeightInternal(h);
+    if (data_drawn) Resize();
+  }
+
+  void SetSize(double w, double h) {
+    dynamic_width = false;
+    SetWidthInternal(w);
+    SetHeightInternal(h);
+    if (data_drawn) Resize();
   }
 
   /// Load data from file given:
@@ -184,24 +431,6 @@ public:
       this->pending_funcs.Add([this, filename]() { this->LoadDataFromCSV(filename); });
     }
   }
-
-  void Draw() {
-    std::cout << "Draw!" << std::endl;
-    EM_ASM_ARGS({
-      var vis_obj_id = Pointer_stringify($0);
-
-      // Get our handle on this visualization's container.
-      var vis = emp.StateSeqVis[vis_obj_id];
-
-      // TODO: dynamic sizing.
-      // Change width/height?
-      $("#"+vis_obj_id).attr({"width": 10, "height": 10});
-
-      // Calculate range.
-
-    }, GetID().c_str());
-  }
-
 };
 
 }
