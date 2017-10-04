@@ -4,7 +4,7 @@
 
 #include "web/web.h"
 
-#include "StateSequenceVisualization.h"
+#include "../source/StateSequenceVisualization.h"
 
 namespace UI = emp::web;
 

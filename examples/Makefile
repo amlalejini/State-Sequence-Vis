@@ -1,6 +1,6 @@
 # Project-specific settings
 PROJECT := state_sequence_vis
-EMP_DIR := ../Empirical/source
+EMP_DIR := ../../Empirical/source
 
 # Flags to use regardless of compiler
 CFLAGS_all := -Wall -Wno-unused-function -std=c++14 -I$(EMP_DIR)/
@@ -20,25 +20,17 @@ CFLAGS_web := $(CFLAGS_all) $(OFLAGS_web) $(OFLAGS_web_all)
 CFLAGS_web_debug := $(CFLAGS_all) $(OFLAGS_web_debug) $(OFLAGS_web_all)
 
 
-default: $(PROJECT)
-native: $(PROJECT)
+default: $(PROJECT).js
 web: $(PROJECT).js
 all: $(PROJECT) $(PROJECT).js
-
-debug:	CFLAGS_nat := $(CFLAGS_nat_debug)
-debug:	$(PROJECT)
 
 debug-web:	CFLAGS_web := $(CFLAGS_web_debug)
 debug-web:	$(PROJECT).js
 
 web-debug:	debug-web
 
-$(PROJECT):	source/native/$(PROJECT).cc
-	$(CXX_nat) $(CFLAGS_nat) source/native/$(PROJECT).cc -o $(PROJECT)
-	@echo To build the web version use: make web
-
-$(PROJECT).js: source/web/$(PROJECT)-web.cc
-	$(CXX_web) $(CFLAGS_web) source/web/$(PROJECT)-web.cc -o web/$(PROJECT).js
+$(PROJECT).js: $(PROJECT)-web.cc
+	$(CXX_web) $(CFLAGS_web) $(PROJECT)-web.cc -o web/$(PROJECT).js
 
 clean:
 	rm -f $(PROJECT) web/$(PROJECT).js *.js.map *~ source/*.o

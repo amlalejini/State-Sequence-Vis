@@ -14,9 +14,6 @@
 #include "web/d3/dataset.h"
 #include "web/d3/visualizations.h"
 
-#include "control/Signal.h"
-
-
 namespace emp {
 namespace web {
 
@@ -61,7 +58,6 @@ protected:
   void SetCurrentCategoryInternal(const std::string & cat) { cur_category = cat; }
 
   void DataCallback() {
-    std::cout << "C++ data callback!" << std::endl;
     // Get categories out of js and into C++.
     categories.clear();
     emp::pass_vector_to_cpp(categories);
@@ -156,7 +152,6 @@ protected:
   }
 
   void Draw() {
-    std::cout << "Draw!" << std::endl;
     EM_ASM_ARGS({
       var vis_obj_id = Pointer_stringify($0);
       var GetHeight = emp[vis_obj_id+"_get_height"];
@@ -252,7 +247,6 @@ protected:
 
   void Resize() {
     if (!data_drawn) return;
-    std::cout << "Resize!" << std::endl;
     EM_ASM_ARGS({
       var vis_obj_id = Pointer_stringify($0);
       var GetHeight = emp[vis_obj_id+"_get_height"];
@@ -335,7 +329,6 @@ public:
   {
     // Create functions relevant to
     EM_ASM_ARGS({
-      console.log("Creating a state sequence vis!");
       var obj_id = Pointer_stringify($0);
       // Create a little JS container to hold everything relevant to this visualization.
       if (!emp.StateSeqVis) { emp.StateSeqVis = {}; }
