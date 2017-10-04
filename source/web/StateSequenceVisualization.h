@@ -39,6 +39,7 @@ protected:
   // TODO: implement this
   bool dynamic_width;
   bool data_drawn;
+  bool data_loaded;
 
   // Dataset descriptions.
   std::string state_seq_cname;       ///< Column name in dataset that specifies state sequence.
@@ -57,13 +58,16 @@ protected:
 
   void SetWidthInternal(double w) { actual_width = w; }
   void SetHeightInternal(double h) { actual_height = h; }
+  void SetCurrentCategoryInternal(const std::string & cat) { cur_category = cat; }
 
   void DataCallback() {
     std::cout << "C++ data callback!" << std::endl;
     // Get categories out of js and into C++.
     categories.clear();
     emp::pass_vector_to_cpp(categories);
-    cur_category = categories[0]; //TODO: some way to do an assert here?
+    // default to first category.
+    if (cur_category == "") cur_category = categories[0];
+    data_loaded = true;
     // Trigger a draw.
     Draw();
   }
@@ -157,12 +161,20 @@ protected:
       var vis_obj_id = Pointer_stringify($0);
       var GetHeight = emp[vis_obj_id+"_get_height"];
       var GetWidth = emp[vis_obj_id+"_get_width"];
+      var SetCurrentCategory = emp[vis_obj_id+"_set_current_category"];
 
       var cur_category = Pointer_stringify($1);
       var margins = ({top: $2, right: $3, bottom: $4, left: $5});
 
       // Get our handle on this visualization's container.
       var vis = emp.StateSeqVis[vis_obj_id];
+
+      // Check on cur category (make sure it's valid).
+      if (vis["categories"].indexOf(cur_category) == -1) {
+        alert("Failed to find category: " + cur_category + "\nDisplaying default: " + vis["categories"][0]);
+        cur_category = vis["categories"][0];
+        SetCurrentCategory(cur_category);
+      }
 
       var vis_width = GetWidth();
       var vis_height = GetHeight();
@@ -316,9 +328,10 @@ protected:
 
 public:
   StateSequenceVisualization(double _width, double _height, bool _dynamic_width=false)
-    : D3Visualization(_width, _height), margins(), dynamic_width(_dynamic_width), data_drawn(false),
+    : D3Visualization(_width, _height), margins(), dynamic_width(_dynamic_width), data_drawn(false), data_loaded(false),
       state_seq_cname(), state_starts_cname(), state_durations_cname(), category_cname(),
-      seqID_cname(), seq_delim(), categories(), cur_category(), actual_width(_width), actual_height(_height)
+      seqID_cname(), seq_delim(), categories(), cur_category(""),
+      actual_width(_width), actual_height(_height)
   {
     // Create functions relevant to
     EM_ASM_ARGS({
@@ -347,6 +360,7 @@ public:
     JSWrap([this]() { return this->GetForRealHeight(); }, GetID() + "_get_height");
     JSWrap([this]() { return this->IsDynamicWidth(); }, GetID() + "_is_dynamic_width");
     JSWrap([this]() { this->Resize(); }, GetID() + "_resize");
+    JSWrap([this](std::string cat) { this->SetCurrentCategoryInternal(cat); }, GetID() + "_set_current_category");
 
     EM_ASM_ARGS({
       var vis_obj_id = Pointer_stringify($0);
@@ -388,6 +402,8 @@ public:
   double GetForRealWidth() const { return actual_width; }
   double GetForRealHeight() const { return actual_height; }
 
+  const std::string & GetCurrentCategory() const { return cur_category; }
+
   bool IsDynamicWidth() const { return dynamic_width; }
 
   void SetDynamicWidth(bool val) { dynamic_width = val; }
@@ -408,6 +424,11 @@ public:
     SetWidthInternal(w);
     SetHeightInternal(h);
     if (data_drawn) Resize();
+  }
+
+  void SetCurrentCategory(const std::string & cat) {
+    SetCurrentCategoryInternal(cat);
+    if (data_loaded) Draw();
   }
 
   /// Load data from file given:
