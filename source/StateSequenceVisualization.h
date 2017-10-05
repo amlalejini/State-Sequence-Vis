@@ -360,7 +360,7 @@ public:
     JSWrap([this]() { return this->IsDynamicWidth(); }, GetID() + "_is_dynamic_width");
     JSWrap([this]() { this->Resize(); }, GetID() + "_resize");
     JSWrap([this](std::string cat) { this->SetCurrentCategoryInternal(cat); }, GetID() + "_set_current_category");
-
+    JSWrap([this]() { this->Redraw(); }, GetID() + "_redraw");
     EM_ASM_ARGS({
       var vis_obj_id = Pointer_stringify($0);
       var GetHeight = emp[vis_obj_id+"_get_height"];
@@ -482,7 +482,7 @@ public:
     }
   }
 
-  /// Redraw the visualization. Does nothing if data has not been drawn yet. 
+  /// Redraw the visualization. Does nothing if data has not been drawn yet.
   void Redraw() {
     if (!data_drawn) return;
     Draw();
